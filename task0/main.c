@@ -18,10 +18,13 @@ int main(void)
 	readbmp("before.bmp", image);
 
 	// Alter the image here
-	uchar *newImage = calloc(NEW_XSIZE * NEW_YSIZE * 3, 1); // Three uchars per pixel (RGB)
-	resizeImage(image, XSIZE, YSIZE, NEW_XSIZE, NEW_YSIZE, newImage);
+	uchar *invertedColorImage = calloc(XSIZE * YSIZE * 3, 1); // Three uchars per pixel (RGB)
+	invertColors(image, XSIZE, YSIZE, invertedColorImage); // Invert colors
 
-	savebmp("after.bmp", newImage, NEW_XSIZE, NEW_YSIZE);
+	uchar *newImage = calloc(NEW_XSIZE * NEW_YSIZE * 3, 1); // New bitmap of twice the original size
+	resizeImage(invertedColorImage, XSIZE, YSIZE, NEW_XSIZE, NEW_YSIZE, newImage); // Resize image using nearest neighbor interpolation
+
+	savebmp("after.bmp", newImage, NEW_XSIZE, NEW_YSIZE); // Save image
 
 	free(image);
 	free(newImage);
@@ -29,9 +32,17 @@ int main(void)
 }
 
 
-void invertColors(const uchar* beforeImage, uchar* newImage) 
+void invertColors(const uchar* beforeImage, int width, int height, uchar* newImage) 
 {
-	return;
+	// Iterate through image
+	for (int y = 0; y < height; y++) {
+		for (int x = 0; x < width; x++) {
+			for (int c = 0; c < 3; c++) {
+				int index = (y * width + x) * 3 + c;
+				newImage[index] = 255 - beforeImage[index];
+			}
+		}
+	}
 }
 
 
