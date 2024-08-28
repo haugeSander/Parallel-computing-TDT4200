@@ -99,16 +99,32 @@ void domain_rotate ( void )
 // TASK: T4
 // Derive step t+1 from steps t and t-1.
 // BEGIN: T4
-    ;
+void domain_forward ( void )
+{
+    // Pre-calculated: dt^2*c^2/h^2, for performance
+    double dtch_pre_calculated = (dt * dt * c * c) / (dx * dx);
+
+    for (int i = 1; i < N-1; i++) {
+        // Equation 6 implemented
+        U_nxt(i) = -U_prv(i) + 2 * U(i) + (dtch_pre_calculated * (U(i-1) + U(i+1) - 2 * U(i)));
+    }
+}
 // END: T4
 
 
 // TASK: T5
 // Neumann (reflective) boundary condition.
 // BEGIN: T5
-    ;
+void domain_ghost_setter ( void ) 
+{
+    for (int i = 0; i < 3; i++) {
+        // Sets the first buffer element (0) to the next to first within the boundry
+        buffers[i][0] = buffers[i][2];
+        // Sets the last element (N+1, as described in domain_initialize) to the next to last within the boundry
+        buffers[i][N+1] = buffers[i][N-1];
+    }
+}
 // END: T5
-
 
 // TASK: T6
 // Main time integration.
