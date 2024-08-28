@@ -88,7 +88,7 @@ void domain_finalize ( void )
 // BEGIN: T3
 void domain_rotate ( void )
 {
-    real_t* previous = &buffers[0];
+    real_t* previous = buffers[0];
     buffers[0] = buffers[1];
     buffers[1] = buffers[2];
     buffers[2] = previous;
@@ -131,8 +131,7 @@ void domain_ghost_setter ( void )
 void simulate( void )
 {
 // BEGIN: T6
-    int_t iteration=0;
-    for (iteration; iteration < max_iteration; iteration++) {
+    for (int_t iteration=0; iteration < max_iteration; iteration++) {
         // Set the ghost
         domain_ghost_setter();
         domain_forward();
