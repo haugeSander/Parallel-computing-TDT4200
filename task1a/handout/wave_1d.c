@@ -50,17 +50,15 @@ void domain_save ( int_t step )
 void domain_initialize ( void )
 {
 // BEGIN: T1
-    size_t buffer_size = (N + 2) * sizeof(real_t);
-
     for (int i = 0; i < 3; i++) {
-        buffers[i] = (real_t*) malloc(buffer_size * sizeof(double));
+        buffers[i] = (real_t*) malloc((N + 2) * sizeof(real_t));
         // Initialize the buffer to zero
-        memset(buffers[i], 0, buffer_size);
+        memset(buffers[i], 0, (N + 2) * sizeof(real_t));
     }
 
-    for (int i = 0; i < N; i++) {
-        double x = i * dx;
-        double y = cos((M_PI * x) / N);
+    for (int i = 1; i < N; i++) {
+        real_t x = i * dx;
+        real_t y = cos((M_PI * x) / N);
         U_prv(i) = y;
         U(i) = y;
     }
@@ -88,7 +86,7 @@ void domain_finalize ( void )
 // BEGIN: T3
 void domain_rotate ( void )
 {
-    real_t* previous = buffers[0];
+    real_t *previous = buffers[0];
     buffers[0] = buffers[1];
     buffers[1] = buffers[2];
     buffers[2] = previous;
@@ -104,7 +102,7 @@ void domain_forward ( void )
     // Pre-calculated: dt^2*c^2/h^2, for performance
     double dtch_pre_calculated = (dt * dt * c * c) / (dx * dx);
 
-    for (int i = 1; i < N-1; i++) {
+    for (int i = 0; i < N; i++) {
         // Equation 6 implemented
         U_nxt(i) = -U_prv(i) + 2 * U(i) + (dtch_pre_calculated * (U(i-1) + U(i+1) - 2 * U(i)));
     }
@@ -117,12 +115,10 @@ void domain_forward ( void )
 // BEGIN: T5
 void domain_ghost_setter ( void ) 
 {
-    for (int i = 0; i < 3; i++) {
-        // Sets the first buffer element (0) to the next to first within the boundry
-        buffers[i][0] = buffers[i][2];
-        // Sets the last element (N+1, as described in domain_initialize) to the next to last within the boundry
-        buffers[i][N+1] = buffers[i][N-1];
-    }
+    // Sets the first buffer element (0) to the next to first within the boundry
+    U(-1) = U(1);
+    // Sets the last element to the next to last within the boundry
+    U(N) = U(N-2);
 }
 // END: T5
 
