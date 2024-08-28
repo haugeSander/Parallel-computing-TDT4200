@@ -132,7 +132,17 @@ void simulate( void )
 {
 // BEGIN: T6
     int_t iteration=0;
-    domain_save ( iteration / snapshot_freq );
+    for (iteration; iteration < max_iteration; iteration++) {
+        // Set the ghost
+        domain_ghost_setter();
+        domain_forward();
+        domain_rotate();
+
+        // Reduce amount of saves to be based on the snapshot frequency.
+        if (iteration != 0 && iteration % snapshot_freq == 0) {
+            domain_save ( iteration / snapshot_freq );
+        }
+    }
 // END: T6
 }
 
