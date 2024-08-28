@@ -86,7 +86,13 @@ void domain_finalize ( void )
 // TASK: T3
 // Rotate the time step buffers.
 // BEGIN: T3
-    ;
+void domain_rotate ( void )
+{
+    real_t* previous = &buffers[0];
+    buffers[0] = buffers[1];
+    buffers[1] = buffers[2];
+    buffers[2] = previous;
+}
 // END: T3
 
 
