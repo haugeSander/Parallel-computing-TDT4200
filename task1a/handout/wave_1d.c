@@ -75,7 +75,10 @@ void domain_initialize ( void )
 // BEGIN: T2
 void domain_finalize ( void )
 {
-    ;
+    for (int i = 0; i < 3; i++) {
+        free(buffers[i]);
+        buffers[i] = NULL;
+    }
 }
 // END: T2
 
