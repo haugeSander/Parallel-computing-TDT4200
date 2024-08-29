@@ -58,7 +58,7 @@ void domain_initialize ( void )
 
     for (int i = 1; i < N; i++) {
         real_t x = i * dx;
-        real_t y = cos((M_PI * x) / N);
+        real_t y = cos(M_PI * x / N);
         U_prv(i) = y;
         U(i) = y;
     }
@@ -99,12 +99,9 @@ void domain_rotate ( void )
 // BEGIN: T4
 void domain_forward ( void )
 {
-    // Pre-calculated: dt^2*c^2/h^2, for performance
-    double dtch_pre_calculated = (dt * dt * c * c) / (dx * dx);
-
     for (int i = 0; i < N; i++) {
         // Equation 6 implemented
-        U_nxt(i) = -U_prv(i) + 2 * U(i) + (dtch_pre_calculated * (U(i-1) + U(i+1) - 2 * U(i)));
+        U_nxt(i) = -U_prv(i) + 2 * U(i) + (((dt * dt * c * c) / (dx * dx)) * (U(i-1) + U(i+1) - 2 * U(i)));
     }
 }
 // END: T4
@@ -116,7 +113,7 @@ void domain_forward ( void )
 void domain_ghost_setter ( void ) 
 {
     // Sets the first buffer element (0) to the next to first within the boundry
-    U(-1) = U(1);
+    U(0) = U(2);
     // Sets the last element to the next to last within the boundry
     U(N) = U(N-2);
 }
@@ -134,7 +131,7 @@ void simulate( void )
         domain_rotate();
 
         // Reduce amount of saves to be based on the snapshot frequency.
-        if (iteration != 0 && iteration % snapshot_freq == 0) {
+        if (iteration % snapshot_freq == 0) {
             domain_save ( iteration / snapshot_freq );
         }
     }
