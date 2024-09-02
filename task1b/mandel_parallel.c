@@ -98,7 +98,7 @@ int main(int argc,char **argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
 	if (size < 2) {
-		if (rank == 0) printf("This program must be run with 3 processes.\n");
+		if (rank == 0) printf("This program must be run with 3 or more processes.\n");
     	MPI_Finalize();
     	return 1;
 	}
@@ -108,22 +108,23 @@ int main(int argc,char **argv) {
     int start_y = rank * rows_per_process + (rank < remainder ? rank : remainder);
     int end_y = start_y + rows_per_process + (rank < remainder ? 1 : 0);
     int local_rows = end_y - start_y;
+	
 	calculate(start_y, end_y);
 
-    int *recvcounts = NULL;
-    int *displs = NULL;
-    if (rank == 0) {
-        recvcounts = (int*)malloc(size * sizeof(int));
-        displs = (int*)malloc(size * sizeof(int));
-        for (int i = 0; i < size; i++) {
-            recvcounts[i] = (rows_per_process + (i < remainder ? 1 : 0)) * XSIZE;
-            displs[i] = (i * rows_per_process + (i < remainder ? i : remainder)) * XSIZE;
-        }
-    }
-	// Gather all results to rank 0
-    MPI_Gatherv(&pixel[start_y * XSIZE], local_rows * XSIZE, MPI_INT,
-                pixel, recvcounts, displs, MPI_INT, 0, MPI_COMM_WORLD);
-
+	if (rank != 0) {
+	     MPI_Send(&pixel[start_y * XSIZE], rows_per_process * XSIZE, MPI_INT, 0, 0, MPI_COMM_WORLD);
+	} else {
+		for (int i = 1; i < size; i++) {
+			MPI_Recv(&pixel[i * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	    }
+		//MPI_Recv(&pixel[1 * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		//MPI_Recv(&pixel[2 * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, 2, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		//MPI_Recv(&pixel[3 * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, 3, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	}
+	//    for (int i = 1; i < 2; i++) {
+	//		MPI_Recv(&pixel[1 * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+	//    }
+	//}
 	double end_time = get_time();
     if (rank == 0) {
         printf("Execution time: %f seconds\n", end_time - start_time);
