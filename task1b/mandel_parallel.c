@@ -44,6 +44,7 @@ void calculate(int start_y, int end_y) {
 	}
 }
 
+/* Get current time at nanosecond level */
 double get_time() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -84,47 +85,46 @@ int main(int argc,char **argv) {
 		return 0;
 	}
 
-    double start_time = get_time();
-
 	/* Calculate the range in the y-axis such that we preserve the
 	   aspect ratio */
 	step=(xright-xleft)/XSIZE;
 	yupper=ycenter+(step*YSIZE)/2;
 	ylower=ycenter-(step*YSIZE)/2;
 	
-	int rank, size, message_Item;
+	int rank, size;
 	MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
 	if (size < 2) {
-		if (rank == 0) printf("This program must be run with 3 or more processes.\n");
+		if (rank == 0) printf("This program must be run with 2 or more processes.\n");
     	MPI_Finalize();
     	return 1;
 	}
+	// Time measurement
+	double start_time = get_time();
 
+	// Define amount of rows and potential remainder
     int rows_per_process = YSIZE / size;
     int remainder = YSIZE % size;
+	// Define start and end for use in calculation method
     int start_y = rank * rows_per_process + (rank < remainder ? rank : remainder);
     int end_y = start_y + rows_per_process + (rank < remainder ? 1 : 0);
-    int local_rows = end_y - start_y;
 	
 	calculate(start_y, end_y);
 
+	// Send data if it is not process 0
 	if (rank != 0) {
 	     MPI_Send(&pixel[start_y * XSIZE], rows_per_process * XSIZE, MPI_INT, 0, 0, MPI_COMM_WORLD);
 	} else {
+		// Receive data from all processes
 		for (int i = 1; i < size; i++) {
 			MPI_Recv(&pixel[i * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 	    }
-		//MPI_Recv(&pixel[1 * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-		//MPI_Recv(&pixel[2 * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, 2, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-		//MPI_Recv(&pixel[3 * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, 3, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 	}
-	//    for (int i = 1; i < 2; i++) {
-	//		MPI_Recv(&pixel[1 * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-	//    }
-	//}
+	// Stop processes from continuing until all are finished
+	MPI_Barrier(MPI_COMM_WORLD);
+	// Stop time measurement
 	double end_time = get_time();
     if (rank == 0) {
         printf("Execution time: %f seconds\n", end_time - start_time);
