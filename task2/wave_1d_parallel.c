@@ -9,7 +9,7 @@
 // TASK: T1a
 // Include the MPI headerfile
 // BEGIN: T1a
-#include <mpi/mpi.h>;
+#include <mpi/mpi.h>
 // END: T1a
 
 
@@ -183,7 +183,7 @@ void send_data_to_root()
     } else {
         // Receive data from all processes
         for (int i = 1; i < size; i++) {
-            MPI_Recv(&buffers[1], process_split, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status);
+            MPI_Recv(&buffers[global_start], process_split, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status);
         }
     }
 // END: T7
@@ -196,11 +196,12 @@ void simulate( void )
     // Go through each time step.
     for ( int_t iteration=0; iteration<=max_iteration; iteration++ )
     {
-        if ( (iteration % snapshot_freq)==0 )
+        if ( rank == 0 && (iteration % snapshot_freq)==0 )
         {
             send_data_to_root();
             domain_save ( iteration / snapshot_freq );
         }
+        MPI_Barrier(MPI_COMM_WORLD);
 
         // Derive step t+1 from steps t and t-1.
         border_exchange();
@@ -223,8 +224,6 @@ int main ( int argc, char **argv )
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 // END: T1c
     
-    struct timeval t_start, t_end;
-
     domain_initialize();
 
 // TASK: T2
