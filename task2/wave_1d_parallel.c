@@ -133,8 +133,14 @@ void time_step ( void )
 void boundary_condition ( void )
 {
 // BEGIN: T6
-    U(-1) = U(1);
-    U(N) = U(N-2);
+    if (rank == 0)
+    {
+        U(-1) = U(1);    
+    }
+    if (rank == size - 1)
+    {
+        U(N) = U(N-2);
+    }
 // END: T6
 }
 
@@ -146,19 +152,21 @@ void border_exchange( void )
 // BEGIN: T5
     MPI_Status status;
 
+    // Send right, receive left
     if (rank < size - 1) {
         MPI_Send(&U(process_split-1), 1, MPI_DOUBLE, rank+1, 0, MPI_COMM_WORLD);
-    } 
+    }
     if (rank > 0) {
         MPI_Recv(&U(-1), 1, MPI_DOUBLE, rank-1, 0, MPI_COMM_WORLD, &status);
     }
-    
-    if (rank < 0) {
+
+    // Send left, receive right
+    if (rank > 0) {
         MPI_Send(&U(0), 1, MPI_DOUBLE, rank-1, 1, MPI_COMM_WORLD);
     }
-    if (rank > size - 1) {
+    if (rank < size - 1) {
         MPI_Recv(&U(process_split), 1, MPI_DOUBLE, rank+1, 1, MPI_COMM_WORLD, &status);
-    } 
+    }
 // END: T5
 }
 
@@ -169,9 +177,14 @@ void border_exchange( void )
 void send_data_to_root()
 {
 // BEGIN: T7
-    // Receive data from all processes
-    for (int i = 1; i < size; i++) {
-        MPI_Recv(&pixel[i * rows_per_process * XSIZE], rows_per_process * XSIZE, MPI_INT, i, 0, MPI_COM);
+    MPI_Status status;
+    if (rank != 0) {
+        MPI_Send(&buffers[1], process_split, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+    } else {
+        // Receive data from all processes
+        for (int i = 1; i < size; i++) {
+            MPI_Recv(&buffers[1], process_split, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status);
+        }
     }
 // END: T7
 }
