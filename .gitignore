@@ -3,3 +3,8 @@
 /task1a/handout/*.exe
 /task1a/handout/*.mp4
 /task1a/handout/wave_1d
+/task2/data
+/task2/images
+/task2/*.mp4
+/task2/sequential
+/task2/parallel
