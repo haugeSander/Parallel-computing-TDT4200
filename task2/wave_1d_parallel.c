@@ -73,7 +73,14 @@ void domain_save ( int_t step )
 void domain_initialize ( void )
 {
 // BEGIN: T3
-    process_split = (rank != 0) ? N / size : N;
+    int remainder = N % size;
+    process_split = N / size;
+    if (rank < remainder) {
+        process_split++;
+        global_start = rank * process_split;
+    } else {
+        global_start = rank * (N / size) + remainder;
+    }    
     int buffer_size = process_split + 2;
 
     for (int i = 0; i < 3; i++) {
@@ -83,15 +90,15 @@ void domain_initialize ( void )
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
     }
-    
-    global_start = rank * (N / size);
-    for ( int_t i=0; i<process_split; i++ ) {
-        U_prv(i) = U(i) = cos ( M_PI*(global_start + i) / (real_t)N );
+    for (int_t i = 0; i < process_split; i++) {
+        real_t x = (global_start + i) / (real_t)(N - 1);
+        U_prv(i) = U(i) = cos(M_PI * x);
     }
 // END: T3
 
     // Set the time step for 1D case.
     dt = dx / c;
+    printf("Rank %d: Initialized with process_split = %d, global_start = %d\n", rank, process_split, global_start);
 }
 
 
@@ -121,8 +128,11 @@ void time_step ( void )
 // BEGIN: T4
     for ( int_t i=0; i<process_split; i++ )
     {
+        real_t left = (i > 0 || rank > 0) ? U(i-1) : U(0);
+        real_t right = (i < process_split-1 || rank < size-1) ? U(i+1) : U(process_split-1);
+
         U_nxt(i) = -U_prv(i) + 2.0*U(i)
-                 + (dt*dt*c*c)/(dx*dx) * (U(i-1)+U(i+1)-2.0*U(i));
+                 + (dt*dt*c*c)/(dx*dx) * (left + right - 2.0 *U(i));
     }
 // END: T4
 }
@@ -150,23 +160,19 @@ void boundary_condition ( void )
 void border_exchange( void )
 {
 // BEGIN: T5
-    MPI_Status status;
+    MPI_Request requests[4];
+    MPI_Status statuses[4];
+    int request_count = 0;
 
-    // Send right, receive left
     if (rank < size - 1) {
-        MPI_Send(&U(process_split-1), 1, MPI_DOUBLE, rank+1, 0, MPI_COMM_WORLD);
+        MPI_Isend(&U(process_split-1), 1, MPI_DOUBLE, rank+1, 0, MPI_COMM_WORLD, &requests[request_count++]);
+        MPI_Irecv(&U(process_split), 1, MPI_DOUBLE, rank+1, 1, MPI_COMM_WORLD, &requests[request_count++]);
     }
     if (rank > 0) {
-        MPI_Recv(&U(-1), 1, MPI_DOUBLE, rank-1, 0, MPI_COMM_WORLD, &status);
+        MPI_Isend(&U(0), 1, MPI_DOUBLE, rank-1, 1, MPI_COMM_WORLD, &requests[request_count++]);
+        MPI_Irecv(&U(-1), 1, MPI_DOUBLE, rank-1, 0, MPI_COMM_WORLD, &requests[request_count++]);
     }
-
-    // Send left, receive right
-    if (rank > 0) {
-        MPI_Send(&U(0), 1, MPI_DOUBLE, rank-1, 1, MPI_COMM_WORLD);
-    }
-    if (rank < size - 1) {
-        MPI_Recv(&U(process_split), 1, MPI_DOUBLE, rank+1, 1, MPI_COMM_WORLD, &status);
-    }
+    MPI_Waitall(request_count, requests, statuses);
 // END: T5
 }
 
@@ -178,13 +184,32 @@ void send_data_to_root()
 {
 // BEGIN: T7
     MPI_Status status;
-    if (rank != 0) {
-        MPI_Send(&buffers[1], process_split, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
-    } else {
-        // Receive data from all processes
-        for (int i = 1; i < size; i++) {
-            MPI_Recv(&buffers[global_start], process_split, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &status);
+    real_t *global_result = NULL;
+    if (rank == 0) {
+        global_result = (real_t *)malloc(N * sizeof(real_t));
+        if (global_result == NULL) {
+            fprintf(stderr, "Memory allocation failed for global_result\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
         }
+        
+        // Copy root process data
+        memcpy(global_result, &U(0), process_split * sizeof(real_t));
+
+        // Receive data from other processes
+        for (int i = 1; i < size; i++) {
+            int recv_count;
+            int recv_start;
+            
+            MPI_Recv(&recv_count, 1, MPI_INT, i, 0, MPI_COMM_WORLD, &status);
+            MPI_Recv(&recv_start, 1, MPI_INT, i, 1, MPI_COMM_WORLD, &status);
+            MPI_Recv(&global_result[recv_start], recv_count, MPI_DOUBLE, i, 2, MPI_COMM_WORLD, &status);
+        }        
+        free(global_result);
+    } else {
+        // Send data to root
+        MPI_Send(&process_split, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
+        MPI_Send(&global_start, 1, MPI_INT, 0, 1, MPI_COMM_WORLD);
+        MPI_Send(&U(0), process_split, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD);
     }
 // END: T7
 }
@@ -193,29 +218,45 @@ void send_data_to_root()
 // Main time integration.
 void simulate( void )
 {
-    // Go through each time step.
-    for ( int_t iteration=0; iteration<=max_iteration; iteration++ )
+    if (rank == 0) {
+        printf("Entering simulate function\n");
+        fflush(stdout);
+    }
+
+    for (int_t iteration = 0; iteration <= max_iteration; iteration++)
     {
-        if ( rank == 0 && (iteration % snapshot_freq)==0 )
+        if (iteration % 1000 == 0 && rank == 0) {
+            printf("Starting iteration %ld\n", iteration);
+            fflush(stdout);
+        }
+
+        if (rank == 0 && (iteration % snapshot_freq == 0))
         {
             send_data_to_root();
-            domain_save ( iteration / snapshot_freq );
+            domain_save(iteration / snapshot_freq);
         }
-        MPI_Barrier(MPI_COMM_WORLD);
 
-        // Derive step t+1 from steps t and t-1.
         border_exchange();
         boundary_condition();
         time_step();
-
         move_buffer_window();
+
+        if (iteration % 1000 == 0 && rank == 0) {
+            printf("Completed iteration %ld\n", iteration);
+            fflush(stdout);
+        }
     }
+
+    if (rank == 0) {
+        printf("Exiting simulate function\n");
+        fflush(stdout);
+    }
+
 }
 
 
 int main ( int argc, char **argv )
 {
-    struct timeval t_start, t_end;
 // TASK: T1c
 // Initialise MPI
 // BEGIN: T1c
@@ -229,12 +270,12 @@ int main ( int argc, char **argv )
 // TASK: T2
 // Time your code
 // BEGIN: T2
-    gettimeofday ( &t_start, NULL );
+    double start_time = MPI_Wtime();
     simulate();
-    gettimeofday ( &t_end, NULL );
+    double end_time = MPI_Wtime();
 
     if (rank == 0) {
-        printf( "Total elapsed time: %lf seconds\n", WALLTIME(t_end) - WALLTIME(t_start));
+        printf("Total elapsed time: %f seconds\n", end_time - start_time);
     }
 // END: T2
    
@@ -245,6 +286,5 @@ int main ( int argc, char **argv )
 // BEGIN: T1d
     MPI_Finalize();
 // END: T1d
-
     exit ( EXIT_SUCCESS );
 }
