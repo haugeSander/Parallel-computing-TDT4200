@@ -30,7 +30,15 @@ real_t
 // TASK: T1b
 // Declare variables each MPI process will need
 // BEGIN: T1b
+
+// Define global variables world_size and world_rank
 int world_size, world_rank;
+// Defines a cartesian communication object
+MPI_Comm cartesian_comm;
+// Sets up 2D arrays for dimensions  and coordinates
+int dimensions[2], coordinates[2];
+// Sets up a period record to decide whether the grip is periodic or not, 0 being not and 1 being periodic
+int periods[2] = {0, 0};
 
 #define U_prv(i,j) buffers[0][((i)+1)*(N+2)+(j)+1]
 #define U(i,j)     buffers[1][((i)+1)*(N+2)+(j)+1]
@@ -51,8 +59,6 @@ const real_t
     dy = 1.0;
 real_t
     dt;
-
-
 
 
 // Rotate the time step buffers.
@@ -204,6 +210,9 @@ int main ( int argc, char **argv )
 // TASK: T3
 // Distribute the user arguments to all the processes
 // BEGIN: T3
+    // Makes sure only process 0 handles the parsing.
+    if (world_rank == 0)
+    {
         OPTIONS *options = parse_args( argc, argv );
         if ( !options )
         {
@@ -215,6 +224,18 @@ int main ( int argc, char **argv )
         N = options->N;
         max_iteration = options->max_iteration;
         snapshot_freq = options->snapshot_frequency;
+    }
+    // Process 0 broadcasts all user arguments to the other processes
+    MPI_Bcast(&M, 1, MPI_INT64_T, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&N, 1, MPI_INT64_T, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&max_iteration, 1, MPI_INT64_T, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&snapshot_freq, 1, MPI_INT64_T, 0, MPI_COMM_WORLD);
+
+    // Set up 2D Cartesian communicator for efficient neighbor communications
+    dimensions[0] = dimensions[1] = 0;  // Specify the dimension being 0, which lets MPI decide the dimensions
+    MPI_Dims_create(world_size, 2, dimensions); // Calculate grid dimensions "automatically"
+    MPI_Cart_create(MPI_COMM_WORLD, 2, dimensions, periods, 1, &cartesian_comm); // Creates the cartesian communicator
+    MPI_Cart_coords(cartesian_comm, world_rank, 2, coordinates); // Get the coordinate of this exact process in the grid
 // END: T3
 
     // Set up the initial state of the domain
