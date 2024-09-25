@@ -11,7 +11,7 @@
 // TASK: T1a
 // Include the MPI headerfile
 // BEGIN: T1a
-;
+#include "mpi/mpi.h"
 // END: T1a
 
 
@@ -30,6 +30,8 @@ real_t
 // TASK: T1b
 // Declare variables each MPI process will need
 // BEGIN: T1b
+int world_size, world_rank;
+
 #define U_prv(i,j) buffers[0][((i)+1)*(N+2)+(j)+1]
 #define U(i,j)     buffers[1][((i)+1)*(N+2)+(j)+1]
 #define U_nxt(i,j) buffers[2][((i)+1)*(N+2)+(j)+1]
@@ -190,7 +192,9 @@ int main ( int argc, char **argv )
 // TASK: T1c
 // Initialise MPI
 // BEGIN: T1c
-    ;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 // END: T1c
 
 
@@ -228,7 +232,7 @@ int main ( int argc, char **argv )
 // TASK: T1d
 // Finalise MPI
 // BEGIN: T1d
-    ;
+    MPI_Finalize();
 // END: T1d
 
     exit ( EXIT_SUCCESS );
