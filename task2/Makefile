@@ -24,9 +24,9 @@ check: dirs sequential parallel
 	cp -rf ./data/* ./data_sequential
 	mpiexec -n 1 --oversubscribe ./parallel
 	./compare.sh
-	mpiexec -n 4 --oversubscribe ./parallel
+	mpiexec -n 2 --oversubscribe ./parallel
 	./compare.sh
-	mpiexec -n 13 --oversubscribe ./parallel
+	mpiexec -n 5 --oversubscribe ./parallel
 	./compare.sh
 	rm -rf data_sequential
 clean:
