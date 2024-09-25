@@ -192,8 +192,11 @@ int main ( int argc, char **argv )
 // TASK: T1c
 // Initialise MPI
 // BEGIN: T1c
+    // Initializes MPI environment
     MPI_Init(&argc, &argv);
+    // Get the total number of processes
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    // Get the rank for the current process
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 // END: T1c
 
@@ -223,7 +226,20 @@ int main ( int argc, char **argv )
 // TASK: T2
 // Time your code
 // BEGIN: T2
+    // Timing is done using the same functions and structure as sequential to ensure cohesion.
+    if (world_rank == 0) {
+        // Gets the time of starting, only for rank 0 as all other processes will send to it when finished.
+        gettimeofday ( &t_start, NULL );
+    }
     simulate();
+
+    if (world_rank == 0) {
+        // Gets the time when simulation is finished.
+        gettimeofday ( &t_end, NULL );
+        printf ( "Total elapsed time: %lf seconds\n",
+           WALLTIME(t_end) - WALLTIME(t_start)
+        );    
+    }
 // END: T2
 
     // Clean up and shut down
@@ -232,6 +248,7 @@ int main ( int argc, char **argv )
 // TASK: T1d
 // Finalise MPI
 // BEGIN: T1d
+    // Finalizes the MPI environment.
     MPI_Finalize();
 // END: T1d
 
