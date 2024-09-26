@@ -148,17 +148,17 @@ void border_exchange ( void )
     MPI_Cart_shift(cartesian_comm, 0, 1, &north, &south);
     MPI_Cart_shift(cartesian_comm, 1, 1, &west, &east);
 
+    // Information switching in x-directions (north-south)
+    MPI_Send(&U(0,0),            partition_N, MPI_DOUBLE, north, 0, cartesian_comm);
+    MPI_Recv(&U(partition_M,0),  partition_N, MPI_DOUBLE, south, 0, cartesian_comm, &status);
+    MPI_Send(&U(partition_M-1,0),partition_N, MPI_DOUBLE, south, 1, cartesian_comm);
+    MPI_Recv(&U(-1,0),           partition_N, MPI_DOUBLE, north, 1, cartesian_comm, &status);
 
-    if (world_rank > 0) {
-        MPI_Send(&U(dimensions[0],dimensions[1]),   1, MPI_DOUBLE, world_rank - 1, 0, MPI_COMM_WORLD);
-        MPI_Recv(&U(coordinates[0],coordinates[1]), 1, MPI_DOUBLE, world_rank - 1, 0, MPI_COMM_WORLD, &status);
-    }
-    if (world_rank < world_size - 1) {
-        MPI_Send(&U(partition_M - 1, partition_N - 1), 1, MPI_DOUBLE, world_rank + 1, 0, MPI_COMM_WORLD);
-        MPI_Recv(&U(partition_M + 1, partition_N + 1), 1, MPI_DOUBLE, world_rank + 1, 0, MPI_COMM_WORLD, &status);
-    }
-
-    MPI_Cart_shift(cartesian_comm, 1, 1, world_rank, world_rank+1);
+    // Information switching in y-directions (west-east)
+    MPI_Send(&U(0,0),            1, MPI_DOUBLE, west, 2, cartesian_comm);
+    MPI_Recv(&U(0,partition_N),  1, MPI_DOUBLE, east, 2, cartesian_comm, &status);
+    MPI_Send(&U(0,partition_N-1),1, MPI_DOUBLE, east, 3, cartesian_comm);
+    MPI_Recv(&U(0,-1),           1, MPI_DOUBLE, west, 3, cartesian_comm, &status);
 // END: T6
 }
 
