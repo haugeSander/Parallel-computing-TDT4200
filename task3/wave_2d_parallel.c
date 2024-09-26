@@ -39,6 +39,9 @@ MPI_Comm cartesian_comm;
 int dimensions[2], coordinates[2];
 // Sets up a period record to decide whether the grip is periodic or not, 0 being not and 1 being periodic
 int periods[2] = {0, 0};
+// Local M and N per process
+int_t partition_M;
+int_t partition_N;
 
 #define U_prv(i,j) buffers[0][((i)+1)*(N+2)+(j)+1]
 #define U(i,j)     buffers[1][((i)+1)*(N+2)+(j)+1]
@@ -77,17 +80,25 @@ void move_buffer_window ( void )
 void domain_initialize ( void )
 {
 // BEGIN: T4
-    buffers[0] = malloc ( (M+2)*(N+2)*sizeof(real_t) );
-    buffers[1] = malloc ( (M+2)*(N+2)*sizeof(real_t) );
-    buffers[2] = malloc ( (M+2)*(N+2)*sizeof(real_t) );
+    // Partitions the N and M based on the cartesian 2D array
+    partition_M = M / dimensions[0];
+    partition_N = N / dimensions[1];
 
-    for ( int_t i=0; i<M; i++ )
+    // All buffers split evenly, process 0 does not need the full array as all processes will do I/O
+    buffers[0] = malloc ( (partition_M+2)*(partition_N+2)*sizeof(real_t) );
+    buffers[1] = malloc ( (partition_M+2)*(partition_N+2)*sizeof(real_t) );
+    buffers[2] = malloc ( (partition_M+2)*(partition_N+2)*sizeof(real_t) );
+
+    for ( int_t i=0; i<partition_M; i++ )
     {
-        for ( int_t j=0; j<N; j++ )
+        for ( int_t j=0; j<partition_N; j++ )
         {
+            // Backtracking to find the global i and j
+            int_t global_i = coordinates[0] * partition_M + i;
+            int_t global_j = coordinates[1] * partition_N + j;
             // Calculate delta (radial distance) adjusted for M x N grid
-            real_t delta = sqrt ( ((i - M/2.0) * (i - M/2.0)) / (real_t)M +
-                                ((j - N/2.0) * (j - N/2.0)) / (real_t)N );
+            real_t delta = sqrt ( ((global_i - M/2.0) * (global_i - M/2.0)) / (real_t)M +
+                                  ((global_j - N/2.0) * (global_j - N/2.0)) / (real_t)N );
             U_prv(i,j) = U(i,j) = exp ( -4.0*delta*delta );
         }
     }
@@ -112,9 +123,9 @@ void domain_finalize ( void )
 void time_step ( void )
 {
 // BEGIN: T5
-    for ( int_t i=0; i<M; i++ )
+    for ( int_t i=0; i<partition_M; i++ )
     {
-        for ( int_t j=0; j<N; j++ )
+        for ( int_t j=0; j<partition_N; j++ )
         {
             U_nxt(i,j) = -U_prv(i,j) + 2.0*U(i,j)
                      + (dt*dt*c*c)/(dx*dy) * (
@@ -130,7 +141,24 @@ void time_step ( void )
 void border_exchange ( void )
 {
 // BEGIN: T6
-    ;
+    MPI_Status status;
+    int north, south, east, west;
+
+    // Automagically find ranks of neighboring processes
+    MPI_Cart_shift(cartesian_comm, 0, 1, &north, &south);
+    MPI_Cart_shift(cartesian_comm, 1, 1, &west, &east);
+
+
+    if (world_rank > 0) {
+        MPI_Send(&U(dimensions[0],dimensions[1]),   1, MPI_DOUBLE, world_rank - 1, 0, MPI_COMM_WORLD);
+        MPI_Recv(&U(coordinates[0],coordinates[1]), 1, MPI_DOUBLE, world_rank - 1, 0, MPI_COMM_WORLD, &status);
+    }
+    if (world_rank < world_size - 1) {
+        MPI_Send(&U(partition_M - 1, partition_N - 1), 1, MPI_DOUBLE, world_rank + 1, 0, MPI_COMM_WORLD);
+        MPI_Recv(&U(partition_M + 1, partition_N + 1), 1, MPI_DOUBLE, world_rank + 1, 0, MPI_COMM_WORLD, &status);
+    }
+
+    MPI_Cart_shift(cartesian_comm, 1, 1, world_rank, world_rank+1);
 // END: T6
 }
 
@@ -235,7 +263,7 @@ int main ( int argc, char **argv )
     dimensions[0] = dimensions[1] = 0;  // Specify the dimension being 0, which lets MPI decide the dimensions
     MPI_Dims_create(world_size, 2, dimensions); // Calculate grid dimensions "automatically"
     MPI_Cart_create(MPI_COMM_WORLD, 2, dimensions, periods, 1, &cartesian_comm); // Creates the cartesian communicator
-    MPI_Cart_coords(cartesian_comm, world_rank, 2, coordinates); // Get the coordinate of this exact process in the grid
+    MPI_Cart_coords(cartesian_comm, world_rank, 2, coordinates); // Get the coordinate of this process in the grid
 // END: T3
 
     // Set up the initial state of the domain
