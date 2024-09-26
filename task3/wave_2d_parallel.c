@@ -168,15 +168,42 @@ void border_exchange ( void )
 void boundary_condition ( void )
 {
 // BEGIN: T7
-    for ( int_t i=0; i<M; i++ )
+    int up, down, right, left;
+
+    // Automagically find ranks of neighboring processes
+    MPI_Cart_shift(cartesian_comm, 0, 1, &up, &down);
+    MPI_Cart_shift(cartesian_comm, 1, 1, &left, &right);
+
+    if (up == MPI_PROC_NULL)
     {
-        U(i,-1) = U(i,1);
-        U(i,N)  = U(i,N-2);
+        for (int_t j = 0; j < partition_N; j++)
+        {
+            U(-1,j) = U(1,j);
+        }
     }
-    for ( int_t j=0; j<N; j++ )
+    
+    if (down == MPI_PROC_NULL)
     {
-        U(-1,j) = U(1,j);
-        U(M,j)  = U(M-2,j);
+        for (int_t j = 0; j < partition_N; j++)
+        {
+            U(partition_M,j) = U(partition_M-2,j);
+        }
+    }
+    
+    if (left == MPI_PROC_NULL)
+    {
+        for (int_t i = 0; i < partition_M; i++)
+        {
+            U(i,-1) = U(i,1);
+        }
+    }
+    
+    if (right == MPI_PROC_NULL)
+    {
+        for (int_t i = 0; i < partition_M; i++)
+        {
+            U(i,partition_N) = U(i,partition_N-2);
+        }
     }
 // END: T7
 }
