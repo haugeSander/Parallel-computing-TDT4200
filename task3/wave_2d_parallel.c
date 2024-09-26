@@ -103,9 +103,12 @@ void domain_initialize ( void )
             int_t global_i = coordinates[0] * partition_M + i;
             int_t global_j = coordinates[1] * partition_N + j;
             // Calculate delta (radial distance) adjusted for M x N grid
-            real_t delta = sqrt ( ((global_i - M/2.0) * (global_i - M/2.0)) / (real_t)M +
-                                  ((global_j - N/2.0) * (global_j - N/2.0)) / (real_t)N );
-            U_prv(i,j) = U(i,j) = exp ( -4.0*delta*delta );
+            real_t delta = sqrt(
+                (((global_i - M/2.0) * (global_i - M/2.0)) / (real_t)M) +
+                (((global_j - N/2.0) * (global_j - N/2.0)) / (real_t)N)
+            );
+
+            U_prv(i,j) = U(i,j) = exp(-4.0 * delta * delta);
         }
     }
     // Set the time step for 2D case
@@ -146,21 +149,17 @@ void time_step ( void )
 void border_exchange ( void )
 {
 // BEGIN: T6
-    // Information switching in x-directions (north-south)
-    MPI_Sendrecv(&U(0, 0), partition_N, MPI_DOUBLE, up, 0,
-                 &U(partition_M, 0), partition_N, MPI_DOUBLE, down, 0,
-                 cartesian_comm, MPI_STATUS_IGNORE);
-    MPI_Sendrecv(&U(partition_M - 1, 0), partition_N, MPI_DOUBLE, down, 1,
-                 &U(-1, 0), partition_N, MPI_DOUBLE, up, 1,
-                 cartesian_comm, MPI_STATUS_IGNORE);
+    // Information switching in x-directions (up-down)
+    MPI_Send(&U(0,0),            partition_N, MPI_DOUBLE, up, 0, cartesian_comm);
+    MPI_Recv(&U(partition_M,0),  partition_N, MPI_DOUBLE, down, 0, cartesian_comm, MPI_STATUS_IGNORE);
+    MPI_Send(&U(partition_M-1,0),partition_N, MPI_DOUBLE, down, 1, cartesian_comm);
+    MPI_Recv(&U(-1,0),           partition_N, MPI_DOUBLE, up, 1, cartesian_comm, MPI_STATUS_IGNORE);
 
-    // Information switching in y-directions (west-east)
-    MPI_Sendrecv(&U(0, 0), 1, MPI_DOUBLE, left, 2,
-                 &U(0, partition_N), 1, MPI_DOUBLE, right, 2,
-                 cartesian_comm, MPI_STATUS_IGNORE);
-    MPI_Sendrecv(&U(0, partition_N - 1), 1, MPI_DOUBLE, right, 3,
-                 &U(0, -1), 1, MPI_DOUBLE, left, 3,
-                 cartesian_comm, MPI_STATUS_IGNORE);
+    // Information switching in y-directions (left-right)
+    MPI_Send(&U(0,0),            1, MPI_DOUBLE, left, 2, cartesian_comm);
+    MPI_Recv(&U(0,partition_N),  1, MPI_DOUBLE, right, 2, cartesian_comm, MPI_STATUS_IGNORE);
+    MPI_Send(&U(0,partition_N-1),1, MPI_DOUBLE, right, 3, cartesian_comm);
+    MPI_Recv(&U(0,-1),           1, MPI_DOUBLE, left, 3, cartesian_comm, MPI_STATUS_IGNORE);
 // END: T6
 }
 
