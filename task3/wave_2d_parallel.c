@@ -42,6 +42,8 @@ int periods[2] = {0, 0};
 // Local M and N per process
 int_t partition_M;
 int_t partition_N;
+int start_i, start_j;
+
 // Processes up, down, right and left of current process
 int up, down, right, left;
 
@@ -85,6 +87,8 @@ void domain_initialize ( void )
     // Partitions the N and M based on the cartesian 2D array
     partition_M = M / dimensions[0];
     partition_N = N / dimensions[1];
+    //start_i = coordinates[0] * partition_M;
+    //start_j = coordinates[1] * partition_N;
 
     // Automagically find ranks of neighboring processes
     MPI_Cart_shift(cartesian_comm, 0, 1, &up, &down);
@@ -95,24 +99,23 @@ void domain_initialize ( void )
     buffers[1] = malloc((partition_M+2)*(partition_N+2)*sizeof(real_t));
     buffers[2] = malloc((partition_M+2)*(partition_N+2)*sizeof(real_t));
     
-    for ( int_t i=0; i<partition_M; i++ )
-    {
-        for ( int_t j=0; j<partition_N; j++ )
-        {
+    memset(buffers[0], 0, (partition_M+2)*(partition_N+2)*sizeof(real_t));
+    memset(buffers[1], 0, (partition_M+2)*(partition_N+2)*sizeof(real_t));
+    memset(buffers[2], 0, (partition_M+2)*(partition_N+2)*sizeof(real_t));
+
+    for (int_t i = 0; i < partition_M; i++) {
+        for (int_t j = 0; j < partition_N; j++) {
             // Backtracking to find the global i and j
             int_t global_i = coordinates[0] * partition_M + i;
             int_t global_j = coordinates[1] * partition_N + j;
             // Calculate delta (radial distance) adjusted for M x N grid
-            real_t delta = sqrt(
-                (((global_i - M/2.0) * (global_i - M/2.0)) / (real_t)M) +
-                (((global_j - N/2.0) * (global_j - N/2.0)) / (real_t)N)
-            );
-
-            U_prv(i,j) = U(i,j) = exp(-4.0 * delta * delta);
+            real_t delta = sqrt ( ((global_i - M/2.0) * (global_i - M/2.0)) / (real_t)M +
+                                ((global_j - N/2.0) * (global_j - N/2.0)) / (real_t)N );
+            U_prv(i,j) = U(i,j) = exp ( -4.0*delta*delta );
         }
     }
     // Set the time step for 2D case
-    dt = dx*dy / (c * sqrt (dx*dx+dy*dy));
+    dt = 0.1 * (dx * dy) / (c * sqrt(dx * dx + dy * dy));  // Reduced time step for stability
 // END: T4
 }
 
@@ -137,7 +140,7 @@ void time_step ( void )
         {
             U_nxt(i,j) = -U_prv(i,j) + 2.0*U(i,j)
                      + (dt*dt*c*c)/(dx*dy) * (
-                        U(i-1,j)+U(i+1,j)+U(i,j-1)+U(i,j+1)-4.0*U(i,j)
+                        U(i-1,j) + U(i+1,j) + U(i,j-1) + U(i,j+1) - 4.0*U(i,j)
                     );
         }
     }
@@ -149,17 +152,23 @@ void time_step ( void )
 void border_exchange ( void )
 {
 // BEGIN: T6
-    // Information switching in x-directions (up-down)
-    MPI_Send(&U(0,0),            partition_N, MPI_DOUBLE, up, 0, cartesian_comm);
-    MPI_Recv(&U(partition_M,0),  partition_N, MPI_DOUBLE, down, 0, cartesian_comm, MPI_STATUS_IGNORE);
-    MPI_Send(&U(partition_M-1,0),partition_N, MPI_DOUBLE, down, 1, cartesian_comm);
-    MPI_Recv(&U(-1,0),           partition_N, MPI_DOUBLE, up, 1, cartesian_comm, MPI_STATUS_IGNORE);
+    // Information switching in y-directions (up-down)
+    MPI_Sendrecv(&U(0,0), partition_N, MPI_DOUBLE, up, 0,
+                 &U(partition_M,0), partition_N, MPI_DOUBLE, down, 0,
+                 cartesian_comm, MPI_STATUS_IGNORE);
 
-    // Information switching in y-directions (left-right)
-    MPI_Send(&U(0,0),            1, MPI_DOUBLE, left, 2, cartesian_comm);
-    MPI_Recv(&U(0,partition_N),  1, MPI_DOUBLE, right, 2, cartesian_comm, MPI_STATUS_IGNORE);
-    MPI_Send(&U(0,partition_N-1),1, MPI_DOUBLE, right, 3, cartesian_comm);
-    MPI_Recv(&U(0,-1),           1, MPI_DOUBLE, left, 3, cartesian_comm, MPI_STATUS_IGNORE);
+    MPI_Sendrecv(&U(partition_M - 1,0), partition_N, MPI_DOUBLE, down, 1,
+                 &U(-1,0), partition_N, MPI_DOUBLE, up, 1,
+                 cartesian_comm, MPI_STATUS_IGNORE);
+
+    // Information switching in x-directions (left-right)
+    MPI_Sendrecv(&U(0,partition_N - 1), partition_M, MPI_DOUBLE, right, 2,
+                 &U(0,-1), partition_M, MPI_DOUBLE, left, 2,
+                 cartesian_comm, MPI_STATUS_IGNORE);
+
+    MPI_Sendrecv(&U(0,0), partition_M, MPI_DOUBLE, left, 3, 
+                 &U(0,partition_N), partition_M, MPI_DOUBLE, right, 3, 
+                 cartesian_comm, MPI_STATUS_IGNORE);
 // END: T6
 }
 
@@ -212,21 +221,21 @@ void domain_save ( int_t step )
     // Define filename
     char filename[256];
     sprintf(filename, "data/%.5ld.dat", step);
-    MPI_File fh;
-    MPI_Status status;
 
+    MPI_File fh;
     MPI_File_open(cartesian_comm, filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
 
     MPI_Datatype filetype;
-    int sizes[2] = {M, N};
-    int subsizes[2] = {partition_M, partition_N};
-    int starts[2] = {coordinates[0] * partition_M, coordinates[1] * partition_N};
-    MPI_Type_create_subarray(2, sizes, subsizes, starts, MPI_ORDER_C, MPI_DOUBLE, &filetype);
+    int array_of_sizes[2] = {M, N};
+    int array_of_subsizes[2] = {partition_M, partition_N};
+    int array_of_starts[2] = {start_i, start_j};
+
+    MPI_Type_create_subarray(2, array_of_sizes, array_of_subsizes, array_of_starts, MPI_ORDER_C, MPI_DOUBLE, &filetype);
     MPI_Type_commit(&filetype);
 
     MPI_File_set_view(fh, 0, MPI_DOUBLE, filetype, "native", MPI_INFO_NULL);
 
-    MPI_File_write_all(fh, &U(0,0), partition_M * partition_N, MPI_DOUBLE, &status);
+    MPI_File_write_all(fh, &U(0, 0), partition_M * partition_N, MPI_DOUBLE, MPI_STATUS_IGNORE);
 
     MPI_File_close(&fh);
     MPI_Type_free(&filetype);
@@ -303,7 +312,7 @@ int main ( int argc, char **argv )
 
     // Set up the initial state of the domain
     domain_initialize();
-
+    MPI_Barrier(cartesian_comm);
 
     struct timeval t_start, t_end;
 
