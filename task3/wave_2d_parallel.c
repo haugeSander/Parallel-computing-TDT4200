@@ -87,8 +87,8 @@ void domain_initialize ( void )
     // Partitions the N and M based on the cartesian 2D array
     partition_M = M / dimensions[0];
     partition_N = N / dimensions[1];
-    //start_i = coordinates[0] * partition_M;
-    //start_j = coordinates[1] * partition_N;
+    start_i = coordinates[0] * partition_M;
+    start_j = coordinates[1] * partition_N;
 
     // Automagically find ranks of neighboring processes
     MPI_Cart_shift(cartesian_comm, 0, 1, &up, &down);
@@ -152,6 +152,10 @@ void time_step ( void )
 void border_exchange ( void )
 {
 // BEGIN: T6
+    MPI_Datatype column;
+    MPI_Type_vector(partition_M, U(0, partition_N-1), partition_M+2, MPI_DOUBLE, &column);
+    MPI_Type_commit(&column);
+
     // Information switching in y-directions (up-down)
     MPI_Sendrecv(&U(0,0), partition_N, MPI_DOUBLE, up, 0,
                  &U(partition_M,0), partition_N, MPI_DOUBLE, down, 0,
@@ -162,12 +166,12 @@ void border_exchange ( void )
                  cartesian_comm, MPI_STATUS_IGNORE);
 
     // Information switching in x-directions (left-right)
-    MPI_Sendrecv(&U(0,partition_N - 1), partition_M, MPI_DOUBLE, right, 2,
-                 &U(0,-1), partition_M, MPI_DOUBLE, left, 2,
+    MPI_Sendrecv(&U(0,0), partition_M, column, right, 2,
+                 &U(0,0), partition_M, column, left, 2,
                  cartesian_comm, MPI_STATUS_IGNORE);
 
-    MPI_Sendrecv(&U(0,0), partition_M, MPI_DOUBLE, left, 3, 
-                 &U(0,partition_N), partition_M, MPI_DOUBLE, right, 3, 
+    MPI_Sendrecv(&U(0,0), partition_M, column, left, 3, 
+                 &U(0,0), partition_M, column, right, 3, 
                  cartesian_comm, MPI_STATUS_IGNORE);
 // END: T6
 }
@@ -225,22 +229,28 @@ void domain_save ( int_t step )
     MPI_File fh;
     MPI_File_open(cartesian_comm, filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
 
-    MPI_Datatype filetype;
+    MPI_Datatype filetype_domain;
+    MPI_Datatype file_saving;
     int array_of_sizes[2] = {M, N};
     int array_of_subsizes[2] = {partition_M, partition_N};
     int array_of_starts[2] = {start_i, start_j};
 
-    MPI_Type_create_subarray(2, array_of_sizes, array_of_subsizes, array_of_starts, MPI_ORDER_C, MPI_DOUBLE, &filetype);
-    MPI_Type_commit(&filetype);
+    MPI_Type_create_subarray(2, (int[2]) {M, N}, array_of_subsizes, array_of_starts, MPI_ORDER_C, MPI_DOUBLE, &filetype_domain);
+    MPI_Type_create_subarray(2, array_of_subsizes, array_of_subsizes, (int[2]){start_i+1, start_j+1}, MPI_ORDER_C, MPI_DOUBLE, &file_saving);
+    MPI_Type_commit(&filetype_domain);
+    MPI_Type_commit(&file_saving);
 
-    MPI_File_set_view(fh, 0, MPI_DOUBLE, filetype, "native", MPI_INFO_NULL);
+    MPI_File_set_view(fh, 0, MPI_DOUBLE, filetype_domain, "native", MPI_INFO_NULL);
 
-    MPI_File_write_all(fh, &U(0, 0), partition_M * partition_N, MPI_DOUBLE, MPI_STATUS_IGNORE);
+    MPI_File_write_all(fh, &U(0, 0), partition_M * partition_N, file_saving, MPI_STATUS_IGNORE);
 
     MPI_File_close(&fh);
-    MPI_Type_free(&filetype);
+    MPI_Type_free(&filetype_domain);
+    MPI_Type_free(&file_saving);
 // END: T8
 }
+
+
 
 
 // Main time integration.
