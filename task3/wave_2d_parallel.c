@@ -39,11 +39,13 @@ MPI_Comm cartesian_comm;
 int dimensions[2], coordinates[2];
 // Sets up a period record to decide whether the grip is periodic or not, 0 being not and 1 being periodic
 int periods[2] = {0, 0};
-// Local M and N per process
+// M and N partition sizes per process
 int_t partition_M, partition_N;
 int start_i, start_j;
+// Defines the file for MPI I/O use
 MPI_File fh;
-MPI_Datatype column, row, partitioned_domain, no_ghost_points;
+// Custom data types
+MPI_Datatype column, partitioned_domain, no_ghost_points;
 // Processes up, down, right and left of current process
 int up, down, right, left;
 
@@ -87,6 +89,7 @@ void domain_initialize ( void )
     // Partitions the N and M based on the cartesian 2D array
     partition_M = M / dimensions[0];
     partition_N = N / dimensions[1];
+    // Gets the start i and j locations
     start_i = coordinates[0] * partition_M;
     start_j = coordinates[1] * partition_N;
 
@@ -106,12 +109,12 @@ void domain_initialize ( void )
             int_t global_j = start_j + j;
             // Calculate delta (radial distance) adjusted for M x N grid
             real_t delta = sqrt ( ((global_i - M/2.0) * (global_i - M/2.0)) / (real_t)M +
-                                ((global_j - N/2.0) * (global_j - N/2.0)) / (real_t)N );
+                                  ((global_j - N/2.0) * (global_j - N/2.0)) / (real_t)N );
             U_prv(i,j) = U(i,j) = exp ( -4.0*delta*delta );
         }
     }
     // Set the time step for 2D case
-    dt = (dx * dy) / (c * sqrt(dx * dx + dy * dy));  // Reduced time step for stability
+    dt = dx*dy / (c * sqrt (dx*dx+dy*dy));
 // END: T4
 }
 
@@ -181,6 +184,8 @@ void border_exchange ( void )
 void boundary_condition ( void )
 {
 // BEGIN: T7
+    // Checks if there is a process in each direction, if there is none they will equal MPI_PROC_NULL
+    // and set the neumann boundry condition
     if (up == MPI_PROC_NULL)
     {
         for (int_t j = 0; j < partition_N; j++)
@@ -188,7 +193,6 @@ void boundary_condition ( void )
             U(-1,j) = U(1,j);
         }
     }
-
     if (down == MPI_PROC_NULL)
     {
         for (int_t j = 0; j < partition_N; j++)
@@ -196,7 +200,6 @@ void boundary_condition ( void )
             U(partition_M,j) = U(partition_M-2,j);
         }
     }
-
     if (left == MPI_PROC_NULL)
     {
         for (int_t i = 0; i < partition_M; i++)
@@ -204,7 +207,6 @@ void boundary_condition ( void )
             U(i,-1) = U(i,1);
         }
     }
-
     if (right == MPI_PROC_NULL)
     {
         for (int_t i = 0; i < partition_M; i++)
@@ -224,7 +226,7 @@ void domain_save ( int_t step )
     // Define filename
     char filename[256];
     sprintf(filename, "data/%.5ld.dat", step);
-
+    // Open file, sets the view, writes the entire domain and closes the file.
     MPI_File_open(cartesian_comm, filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
     MPI_File_set_view(fh, 0, MPI_DOUBLE, partitioned_domain, "native", MPI_INFO_NULL);
     MPI_File_write_all(fh, &U(0, 0), 1, no_ghost_points, MPI_STATUS_IGNORE);
@@ -238,7 +240,7 @@ void setup_saving ( void )
     MPI_Type_create_subarray(2, (int[2]) {M, N}, (int[2]) {partition_M, partition_N}, (int[2]) {start_i, start_j}, MPI_ORDER_C, MPI_DOUBLE, &partitioned_domain);
     MPI_Type_commit(&partitioned_domain);
     // Creates a subsarray without the ghost point
-    MPI_Type_create_subarray(2, (int[2]) {partition_M+2, partition_N+2}, (int[2]) {partition_M, partition_N}, (int[2]){1, 1}, MPI_ORDER_C, MPI_DOUBLE, &no_ghost_points);
+    MPI_Type_create_subarray(2, (int[2]) {partition_M+2, partition_N+2}, (int[2]) {partition_M, partition_N}, (int[2]){0, 0}, MPI_ORDER_C, MPI_DOUBLE, &no_ghost_points);
     MPI_Type_commit(&no_ghost_points);
     MPI_File_set_view(fh, 0, MPI_DOUBLE, partitioned_domain, "native", MPI_INFO_NULL);
 }
@@ -305,7 +307,7 @@ int main ( int argc, char **argv )
     MPI_Bcast(&snapshot_freq, 1, MPI_INT64_T, 0, MPI_COMM_WORLD);
 
     // Set up 2D Cartesian communicator for efficient neighbor communications
-    dimensions[0] = dimensions[1] = 0;  // Specify the dimension being 0, which lets MPI decide the dimensions
+    dimensions[0] = dimensions[1] = 0;  // Specify the dimension being 0, which let MPI decide the dimensions
     MPI_Dims_create(world_size, 2, dimensions); // Calculate grid dimensions "automatically"
     MPI_Cart_create(MPI_COMM_WORLD, 2, dimensions, periods, 1, &cartesian_comm); // Creates the cartesian communicator
     MPI_Cart_coords(cartesian_comm, world_rank, 2, coordinates); // Get the coordinate of this process in the grid
