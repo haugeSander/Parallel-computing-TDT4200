@@ -40,10 +40,10 @@ int dimensions[2], coordinates[2];
 // Sets up a period record to decide whether the grip is periodic or not, 0 being not and 1 being periodic
 int periods[2] = {0, 0};
 // Local M and N per process
-int_t partition_M;
-int_t partition_N;
+int_t partition_M, partition_N;
 int start_i, start_j;
-
+MPI_File fh;
+MPI_Datatype column, row, partitioned_domain, no_ghost_points;
 // Processes up, down, right and left of current process
 int up, down, right, left;
 
@@ -99,15 +99,11 @@ void domain_initialize ( void )
     buffers[1] = malloc((partition_M+2)*(partition_N+2)*sizeof(real_t));
     buffers[2] = malloc((partition_M+2)*(partition_N+2)*sizeof(real_t));
     
-    memset(buffers[0], 0, (partition_M+2)*(partition_N+2)*sizeof(real_t));
-    memset(buffers[1], 0, (partition_M+2)*(partition_N+2)*sizeof(real_t));
-    memset(buffers[2], 0, (partition_M+2)*(partition_N+2)*sizeof(real_t));
-
     for (int_t i = 0; i < partition_M; i++) {
         for (int_t j = 0; j < partition_N; j++) {
             // Backtracking to find the global i and j
-            int_t global_i = coordinates[0] * partition_M + i;
-            int_t global_j = coordinates[1] * partition_N + j;
+            int_t global_i = start_i + i;
+            int_t global_j = start_j + j;
             // Calculate delta (radial distance) adjusted for M x N grid
             real_t delta = sqrt ( ((global_i - M/2.0) * (global_i - M/2.0)) / (real_t)M +
                                 ((global_j - N/2.0) * (global_j - N/2.0)) / (real_t)N );
@@ -115,7 +111,7 @@ void domain_initialize ( void )
         }
     }
     // Set the time step for 2D case
-    dt = 0.1 * (dx * dy) / (c * sqrt(dx * dx + dy * dy));  // Reduced time step for stability
+    dt = (dx * dy) / (c * sqrt(dx * dx + dy * dy));  // Reduced time step for stability
 // END: T4
 }
 
@@ -152,27 +148,30 @@ void time_step ( void )
 void border_exchange ( void )
 {
 // BEGIN: T6
-    MPI_Datatype column;
-    MPI_Type_vector(partition_M, U(0, partition_N-1), partition_M+2, MPI_DOUBLE, &column);
-    MPI_Type_commit(&column);
+    // Define custom data type for transferring columns
+    MPI_Type_vector(partition_M, 1, partition_N + 2, MPI_DOUBLE, &column);
+    MPI_Type_commit(&column);    
+    // Row is serial, so does not need to be partitioned like the columns
 
     // Information switching in y-directions (up-down)
-    MPI_Sendrecv(&U(0,0), partition_N, MPI_DOUBLE, up, 0,
-                 &U(partition_M,0), partition_N, MPI_DOUBLE, down, 0,
+    MPI_Sendrecv(&U(0, 0), partition_N, MPI_DOUBLE, up, 0,
+                 &U(partition_M, 0), partition_N, MPI_DOUBLE, down, 0,
                  cartesian_comm, MPI_STATUS_IGNORE);
 
-    MPI_Sendrecv(&U(partition_M - 1,0), partition_N, MPI_DOUBLE, down, 1,
-                 &U(-1,0), partition_N, MPI_DOUBLE, up, 1,
+    MPI_Sendrecv(&U(partition_M - 1, 0), partition_N, MPI_DOUBLE, down, 1,
+                 &U(-1, 0), partition_N, MPI_DOUBLE, up, 1,
                  cartesian_comm, MPI_STATUS_IGNORE);
 
     // Information switching in x-directions (left-right)
-    MPI_Sendrecv(&U(0,0), partition_M, column, right, 2,
-                 &U(0,0), partition_M, column, left, 2,
+    MPI_Sendrecv(&U(0, 0), 1, column, left, 2,
+                 &U(0, partition_N), 1, column, right, 2,
                  cartesian_comm, MPI_STATUS_IGNORE);
 
-    MPI_Sendrecv(&U(0,0), partition_M, column, left, 3, 
-                 &U(0,0), partition_M, column, right, 3, 
+    MPI_Sendrecv(&U(0, partition_N - 1), 1, column, right, 3, 
+                 &U(0, -1), 1, column, left, 3, 
                  cartesian_comm, MPI_STATUS_IGNORE);
+
+    MPI_Type_free(&column);
 // END: T6
 }
 
@@ -226,31 +225,23 @@ void domain_save ( int_t step )
     char filename[256];
     sprintf(filename, "data/%.5ld.dat", step);
 
-    MPI_File fh;
     MPI_File_open(cartesian_comm, filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
-
-    MPI_Datatype filetype_domain;
-    MPI_Datatype file_saving;
-    int array_of_sizes[2] = {M, N};
-    int array_of_subsizes[2] = {partition_M, partition_N};
-    int array_of_starts[2] = {start_i, start_j};
-
-    MPI_Type_create_subarray(2, (int[2]) {M, N}, array_of_subsizes, array_of_starts, MPI_ORDER_C, MPI_DOUBLE, &filetype_domain);
-    MPI_Type_create_subarray(2, array_of_subsizes, array_of_subsizes, (int[2]){start_i+1, start_j+1}, MPI_ORDER_C, MPI_DOUBLE, &file_saving);
-    MPI_Type_commit(&filetype_domain);
-    MPI_Type_commit(&file_saving);
-
-    MPI_File_set_view(fh, 0, MPI_DOUBLE, filetype_domain, "native", MPI_INFO_NULL);
-
-    MPI_File_write_all(fh, &U(0, 0), partition_M * partition_N, file_saving, MPI_STATUS_IGNORE);
-
+    MPI_File_set_view(fh, 0, MPI_DOUBLE, partitioned_domain, "native", MPI_INFO_NULL);
+    MPI_File_write_all(fh, &U(0, 0), 1, no_ghost_points, MPI_STATUS_IGNORE);
     MPI_File_close(&fh);
-    MPI_Type_free(&filetype_domain);
-    MPI_Type_free(&file_saving);
 // END: T8
 }
 
-
+void setup_saving ( void ) 
+{
+    // Creates subarray of M,N grid
+    MPI_Type_create_subarray(2, (int[2]) {M, N}, (int[2]) {partition_M, partition_N}, (int[2]) {start_i, start_j}, MPI_ORDER_C, MPI_DOUBLE, &partitioned_domain);
+    MPI_Type_commit(&partitioned_domain);
+    // Creates a subsarray without the ghost point
+    MPI_Type_create_subarray(2, (int[2]) {partition_M+2, partition_N+2}, (int[2]) {partition_M, partition_N}, (int[2]){1, 1}, MPI_ORDER_C, MPI_DOUBLE, &no_ghost_points);
+    MPI_Type_commit(&no_ghost_points);
+    MPI_File_set_view(fh, 0, MPI_DOUBLE, partitioned_domain, "native", MPI_INFO_NULL);
+}
 
 
 // Main time integration.
@@ -322,7 +313,7 @@ int main ( int argc, char **argv )
 
     // Set up the initial state of the domain
     domain_initialize();
-    MPI_Barrier(cartesian_comm);
+    setup_saving();
 
     struct timeval t_start, t_end;
 
@@ -352,6 +343,8 @@ int main ( int argc, char **argv )
 // Finalise MPI
 // BEGIN: T1d
     // Finalizes the MPI environment.
+    MPI_Type_free(&partitioned_domain);
+    MPI_Type_free(&no_ghost_points);
     MPI_Finalize();
 // END: T1d
 
