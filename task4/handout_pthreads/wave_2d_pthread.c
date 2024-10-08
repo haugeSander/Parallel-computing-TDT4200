@@ -23,6 +23,9 @@ typedef double real_t;
 // BEGIN: T1b
 int_t n_threads = 1;
 pthread_barrier_t barrier;
+int_t rows_per_thread;
+int_t start_row;
+int_t end_row;
 // END: T1b
 
 // Performance measurement
@@ -96,7 +99,7 @@ void domain_finalize ( void )
 void time_step ( int_t thread_id )
 {
 // BEGIN: T3
-    for ( int_t i=0; i<N; i+=1 )
+    for ( int_t i=start_row; i<end_row; i++ )
         for ( int_t j=0; j<N; j++ )
             U_nxt(i,j) = -U_prv(i,j) + 2.0*U(i,j)
                      + (dt*dt*c*c)/(h*h) * (
@@ -111,15 +114,27 @@ void time_step ( int_t thread_id )
 void boundary_condition ( int_t thread_id )
 {
 // BEGIN: T4
-    for ( int_t i=0; i<N; i+=1 )
+    // Row based boundary
+    for ( int_t i=start_row; i<end_row; i++ )
     {
         U(i,-1) = U(i,1);
         U(i,N)  = U(i,N-2);
     }
-    for ( int_t j=0; j<N; j+=1 )
+    // Only first thread to handle top boundary
+    if (thread_id == 0)
     {
-        U(-1,j) = U(1,j);
-        U(N,j)  = U(N-2,j);
+        for ( int_t j=0; j<N; j+=1 )
+        {
+            U(-1,j) = U(1,j);
+        }
+    }
+    // Only last thread handle the bottom boundary
+    if (thread_id == n_threads - 1)
+    {
+        for ( int_t j=0; j<N; j+=1 )
+        {
+            U(N,j)  = U(N-2,j);
+        }
     }
 // END: T4
 }
@@ -143,20 +158,30 @@ void *simulate ( void *id )
 {
 // BEGIN: T5
     // Go through each time step
+    rows_per_thread = N / n_threads;
+    start_row = (int_t)id * rows_per_thread;
+    end_row = (id == n_threads - 1) ? N : ((int_t)id + 1) * rows_per_thread;
+
     for ( int_t iteration=0; iteration<=max_iteration; iteration++ )
     {
-        if ( (iteration % snapshot_freq)==0 )
+        if ( id == 0 && (iteration % snapshot_freq)==0 )
         {
             domain_save ( iteration / snapshot_freq );
         }
-
         // Derive step t+1 from steps t and t-1
-        boundary_condition(0);
-        time_step(0);
+        boundary_condition(id);
+        pthread_barrier_wait(&barrier);
+        time_step(id);
+        pthread_barrier_wait(&barrier);
 
-        // Rotate the time step buffers
-        move_buffer_window();
+        if (id == 0)
+        {
+            // Rotate the time step buffers
+            move_buffer_window();
+        }
+        pthread_barrier_wait(&barrier);
     }
+    return NULL;
 // END: T5
 }
 
@@ -192,7 +217,14 @@ int main ( int argc, char **argv )
 // TASK: T2
 // Run the integration loop
 // BEGIN: T2
-    simulate(NULL);
+    pthread_t thread_ids[n_threads - 1];
+    for (int i = 0; i < n_threads - 1; i++) {
+        pthread_create(&thread_ids[i], NULL, simulate, (void*)(intptr_t)i);
+    }
+    simulate((void*)(intptr_t)(n_threads - 1));
+    for (int i = 0; i < n_threads - 1; i++) {
+        pthread_join(thread_ids[i], NULL);
+    }
 // END: T2
 
     // Report how long we spent in the integration stage
