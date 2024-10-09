@@ -23,9 +23,6 @@ typedef double real_t;
 // BEGIN: T1b
 int_t n_threads = 1;
 pthread_barrier_t barrier;
-int_t rows_per_thread;
-int_t start_row;
-int_t end_row;
 // END: T1b
 
 // Performance measurement
@@ -99,12 +96,19 @@ void domain_finalize ( void )
 void time_step ( int_t thread_id )
 {
 // BEGIN: T3
-    for ( int_t i=start_row; i<end_row; i++ )
-        for ( int_t j=0; j<N; j++ )
+    int_t rows_per_thread = N / n_threads;
+    int_t start_row = (int_t)thread_id * rows_per_thread;
+    int_t end_row = ((int_t)thread_id == n_threads - 1) ? N : ((int_t)thread_id + 1) * rows_per_thread;
+
+    for ( int_t i=start_row; i<end_row; i++ ) {
+        for ( int_t j=0; j<N; j++ ) {
+            //printf("Thread %ld: (%li, %li)", thread_id, i, j);
             U_nxt(i,j) = -U_prv(i,j) + 2.0*U(i,j)
                      + (dt*dt*c*c)/(h*h) * (
                         U(i-1,j)+U(i+1,j)+U(i,j-1)+U(i,j+1)-4.0*U(i,j)
                      );
+        }
+    }
 // END: T3
 }
 
@@ -114,6 +118,10 @@ void time_step ( int_t thread_id )
 void boundary_condition ( int_t thread_id )
 {
 // BEGIN: T4
+    int_t rows_per_thread = N / n_threads;
+    int_t start_row = (int_t)thread_id * rows_per_thread;
+    int_t end_row = ((int_t)thread_id == n_threads - 1) ? N : ((int_t)thread_id + 1) * rows_per_thread;
+
     // Row based boundary
     for ( int_t i=start_row; i<end_row; i++ )
     {
@@ -154,33 +162,30 @@ void domain_save ( int_t step )
 
 // TASK: T5
 // Main loop
-void *simulate ( void *id )
+void *simulate ( void *thread_id )
 {
 // BEGIN: T5
-    // Go through each time step
-    rows_per_thread = N / n_threads;
-    start_row = (int_t)id * rows_per_thread;
-    end_row = (id == n_threads - 1) ? N : ((int_t)id + 1) * rows_per_thread;
-
-    for ( int_t iteration=0; iteration<=max_iteration; iteration++ )
+    for (int_t iteration = 0; iteration <= max_iteration; iteration++)
     {
-        if ( id == 0 && (iteration % snapshot_freq)==0 )
-        {
-            domain_save ( iteration / snapshot_freq );
-        }
-        // Derive step t+1 from steps t and t-1
-        boundary_condition(id);
+        pthread_barrier_wait(&barrier);  // All threads start together
+        
+        boundary_condition((int_t)thread_id);
         pthread_barrier_wait(&barrier);
-        time_step(id);
+        
+        time_step((int_t)thread_id);
         pthread_barrier_wait(&barrier);
-
-        if (id == 0)
+        
+        if (thread_id == 0)
         {
-            // Rotate the time step buffers
+            if ((iteration % snapshot_freq) == 0)
+            {
+                domain_save(iteration / snapshot_freq);
+            }
             move_buffer_window();
         }
-        pthread_barrier_wait(&barrier);
+        pthread_barrier_wait(&barrier);  // Ensure all threads see the updated buffers
     }
+
     return NULL;
 // END: T5
 }
