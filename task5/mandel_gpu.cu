@@ -34,24 +34,29 @@ typedef struct {
 // Also set up a single grid with a 2D thread block
 
 __global__ void device_calculate(int* device_pixel, double xleft, double yupper, double step) {
+    // Calculate global thread indices
     int i = threadIdx.x + blockDim.x * blockIdx.x;
     int j = threadIdx.y + blockDim.y * blockIdx.y;
     
+    // Make sure i and j is within bounds.
     if (i < XSIZE && j < YSIZE) {
         my_complex_t c, z, temp;
         int iter = 0;
-        
+                
+        // Map pixel coordinates to complex plane
         c.real = (xleft + step * i);
         c.imag = (yupper - step * j);
         z = c;
         
+        // Iterate until escape or max iterations reached
         while (z.real * z.real + z.imag * z.imag < 4.0 && iter < MAXITER) {
             temp.real = z.real * z.real - z.imag * z.imag + c.real;
             temp.imag = 2.0 * z.real * z.imag + c.imag;
             z = temp;
             iter++;
         }
-        device_pixel[PIXEL(i,j)] = iter;
+        // Store iteration count
+        device_pixel[i + j * XSIZE] = iter;
     }
 }
 // ********** SUBTASK1 END ***********************************************/
@@ -138,17 +143,25 @@ int main(int argc, char **argv) {
     hosttime+=walltime()-start;
 
     //********** SUBTASK2: Set up device memory ***************************/
-    cudaMalloc((void**)&device_pixel, XSIZE * YSIZE * sizeof(int));
-    cudaMemcpy(device_pixel, host_pixel, (XSIZE * YSIZE * sizeof(int)), cudaMemcpyHostToDevice);
+    // Define a variable for use in device calculations.
+    int *d_pixel;
+    // Allocates necessary size for d_pixel variable based on X/Y-SIZE.
+    cudaMalloc((void**)&d_pixel, XSIZE * YSIZE * sizeof(int));
+    // Copies the memory address' content of device_pixel to d_pixel on the device (GPU)
+    cudaMemcpy(d_pixel, device_pixel, (XSIZE * YSIZE * sizeof(int)), cudaMemcpyHostToDevice);
     /********** SUBTASK2 END **********************************************/
 
     start=walltime();
 
     //********* SUBTASK3: Execute the kernel on the device ************/
+    // Define the dimensions of a thread block.
     dim3 block(BLOCKX, BLOCKY);
+    // Calculate the dimensions of the grid of blocks. 
+    // Even if XSIZE or YSIZE is not evenly divisible by BLOCKX or BLOCKY it will divide it as evenly as possible.
     dim3 grid((XSIZE + BLOCKX - 1) / BLOCKX, (YSIZE + BLOCKY - 1) / BLOCKY);
-    device_calculate<<<grid, block>>>(device_pixel, xleft, yupper, step);
-
+    // Launch the CUDA kernel
+    device_calculate<<<grid, block>>>(d_pixel, xleft, yupper, step);
+    // Synchronize the host (CPU) with the device (GPU) for timing accuracy and ensuring results are ready
     cudaDeviceSynchronize();
     //********** SUBTASK3 END *****************************************/
 
@@ -157,13 +170,15 @@ int main(int argc, char **argv) {
     start=walltime();
 
     //***** SUBTASK4: Transfer the result from device to device_pixel[][]*/
-    cudaMemcpy(host_pixel, device_pixel, (XSIZE * YSIZE * sizeof(int)), cudaMemcpyDeviceToHost);
+    // Copy the results from d_pixel gpu variable to the device_pixel for comparison and saving.
+    cudaMemcpy(device_pixel, d_pixel, (XSIZE * YSIZE * sizeof(int)), cudaMemcpyDeviceToHost);
     //********** SUBTASK4 END ******************************************/
 
     memtime+=walltime()-start;
 
     /****** SUBTASK5: Free the device memory also ************************/
-    cudaFree(device_pixel);
+    // Free the d_pixel gpu variable.
+    cudaFree(d_pixel);
     /********** SUBTASK5 END ******************************************/
 
     int errors=0;
