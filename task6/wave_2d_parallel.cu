@@ -1,5 +1,4 @@
-#define _XOPEN_SOURCE 600
-
+//#define _XOPEN_SOURCE 600
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,7 +29,7 @@ typedef double real_t;
 int_t
     N = 128,
     M = 128,
-    max_iteration = 1000000,
+    max_iteration = 100000,//0,
     snapshot_freq = 1000;
 
 // Wave equation parameters, time step is derived from the space step
@@ -43,16 +42,16 @@ real_t
 
 // Buffers for three time steps, indexed with 2 ghost points for the boundary
 real_t
-    *h_buffers[3] = { NULL, NULL, NULL };
+    *buffers[3] = { NULL, NULL, NULL };
 
-#define h_U_prv(i,j) h_buffers[0][((i)+1)*(N+2)+(j)+1]
-#define h_U(i,j)     h_buffers[1][((i)+1)*(N+2)+(j)+1]
-#define h_U_nxt(i,j) h_buffers[2][((i)+1)*(N+2)+(j)+1]
+#define U_prv(i,j) buffers[0][((i)+1)*(N+2)+(j)+1]
+#define U(i,j)     buffers[1][((i)+1)*(N+2)+(j)+1]
+#define U_nxt(i,j) buffers[2][((i)+1)*(N+2)+(j)+1]
 
 
 // Divide the problem into blocks of BLOCKX x BLOCKY threads
-#define BLOCKY 32
-#define BLOCKX 32
+#define BLOCKY 16
+#define BLOCKX 16
 
 // Global CUDA prop information
 cudaDeviceProp prop;
@@ -72,6 +71,20 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
     }
 }
 
+// Rotate the time step buffers.
+void move_buffer_window ( void )
+{
+    real_t *temp = buffers[0];
+    buffers[0] = buffers[1];
+    buffers[1] = buffers[2];
+    buffers[2] = temp;
+
+    // Rotate pointers for next iteration
+    real_t *d_temp = d_prv;
+    d_prv = d_current;
+    d_current = d_nxt;
+    d_nxt = d_temp;
+}
 
 // Save the present time step in a numbered file under 'data/'
 void domain_save ( int_t step )
@@ -81,7 +94,7 @@ void domain_save ( int_t step )
     FILE *out = fopen ( filename, "wb" );
     for ( int_t i=0; i<M; i++ )
     {
-        fwrite ( &h_U(i,0), sizeof(real_t), N, out );
+        fwrite ( &U(i,0), sizeof(real_t), N, out );
     }
     fclose ( out );
 }
@@ -93,11 +106,14 @@ void domain_finalize ( void )
 {
 // BEGIN: T4
     // Free memory on host
-    free ( h_buffers[0] );
+    free ( buffers[0] );
+    free ( buffers[1] );
+    free ( buffers[2] );
+
     // Free memory on device
-    cudaErrorCheck(cudaFree(d_prv));
-    cudaErrorCheck(cudaFree(d_current));
-    cudaErrorCheck(cudaFree(d_nxt));
+    cudaFree(d_prv);
+    cudaFree(d_current);
+    cudaFree(d_nxt);
 // END: T4
 }
 
@@ -138,6 +154,10 @@ __global__ void device_time_step ( real_t* d_prv, real_t* d_current, real_t* d_n
     // Calculate global thread indices
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
+    
+    // Synchronize the grid
+    //cg::this_grid().sync(); 
+    //device_boundary_condition(d_current, N, M);
 
     // Check if thread is within bounds
     if (i < M && j < N) {
@@ -155,8 +175,7 @@ __global__ void device_time_step ( real_t* d_prv, real_t* d_current, real_t* d_n
                       4.0*d_current[idx]
                    );
     }
-    // Synchronize the grid
-    cg::this_grid().sync();
+    cg::this_grid().sync(); 
 }
 // END: T5
 
@@ -182,26 +201,25 @@ void simulate( void )
     for ( int_t iteration=0; iteration<=max_iteration; iteration++ ) {
         if ( (iteration % snapshot_freq)==0 )
         {
-            size_t size = (M + 2) * (N + 2) * sizeof(real_t);
-            cudaErrorCheck(cudaMemcpy(h_buffers[0], d_current, size, cudaMemcpyDeviceToHost));
+            // Make sure all kernels have completed before copying data
+            cudaDeviceSynchronize();
+            // Copy current state back to host for saving
+            cudaMemcpy(buffers[1], d_current, (M + 2) * (N + 2) * sizeof(real_t), cudaMemcpyDeviceToHost);
+            // Save the current state
             domain_save ( iteration / snapshot_freq );
+                    
+            // Rotate the time step buffers
+            move_buffer_window();
         }
-
-        device_boundary_condition<<<grid, block>>>(d_current, N, M);
-        cudaErrorCheck(cudaGetLastError());
-        cudaErrorCheck(cudaDeviceSynchronize());
-
-        device_time_step<<<grid, block>>>(d_prv, d_current, d_nxt, N, M, dt, dx, dy, c);
-        // Returns the last error from a runtime call
-        cudaErrorCheck(cudaGetLastError());
-        // Synchronize the findings
-        cudaErrorCheck(cudaDeviceSynchronize());
         
-        // Rotate the time step buffers
-        real_t* temp = d_prv;
-        d_prv = d_current;
-        d_current = d_nxt;
-        d_nxt = temp;
+        device_boundary_condition<<<grid, block>>>(d_current, N, M);
+        // Synchronize the findings
+        cudaDeviceSynchronize();
+
+        // Compute next time step
+        device_time_step<<<grid, block>>>(d_prv, d_current, d_nxt, N, M, dt, dx, dy, c);
+        // Synchronize the findings
+        cudaDeviceSynchronize();
     }
 // END: T7
 }
@@ -213,16 +231,16 @@ void occupancy( void )
 {
 // BEGIN: T8
     int maxActiveBlocks;
-    cudaErrorCheck(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(
         &maxActiveBlocks,
         device_time_step,
         BLOCKX * BLOCKY,  // threads per block
         0     // shared memory size
-    ));
+    );
     int activeWarps = maxActiveBlocks * (BLOCKX * BLOCKY) / BLOCKX;  // 32 threads per warp
     int maxWarps = prop.maxThreadsPerMultiProcessor / BLOCKX;
 
-    float occupancyRate = (float)activeWarps / maxWarps;
+    float occupancyRate = (float) activeWarps / maxWarps;
     printf("Theoretical occupancy: %.2f%%\n", occupancyRate * 100);
 // END: T8
 }
@@ -234,7 +252,7 @@ static bool init_cuda()
 {
 // BEGIN: T2
     int deviceCount = 0;
-    cudaErrorCheck(cudaGetDeviceCount(&deviceCount));
+    cudaGetDeviceCount(&deviceCount);
     
     if (deviceCount == 0) {
         printf("Error: No CUDA-compatible GPU device found!\n");
@@ -242,10 +260,10 @@ static bool init_cuda()
     }
 
     // Use first available device
-    cudaErrorCheck(cudaSetDevice(0));
+    cudaSetDevice(0);
     
     // Get and print device properties
-    cudaErrorCheck(cudaGetDeviceProperties(&prop, 0));
+    cudaGetDeviceProperties(&prop, 0);
     
     printf("Device name: %s\n", prop.name);
     printf("Compute capability: %d.%d\n", prop.major, prop.minor);
@@ -271,21 +289,17 @@ void domain_initialize ( void )
         exit( EXIT_FAILURE );
     }
     // Calculate the necessary memory that must be allocated
-    size_t size = (M + 2) * (N + 2)  *sizeof(real_t);
+    size_t size = (M + 2) * (N + 2) * sizeof(real_t);
     
     // Initialize ALL host buffers using calloc
-    h_buffers[0] = (real_t*)calloc((M + 2) * (N + 2), sizeof(real_t));
-    h_buffers[1] = (real_t*)calloc((M + 2) * (N + 2), sizeof(real_t));
-    for (int i = 0; i < 2; i++) {
-        if (h_buffers[i] == NULL) {
-            fprintf(stderr, "Host memory allocation failed\n");
-            exit(EXIT_FAILURE);
-        }
-    }
+    buffers[0] = (real_t*)calloc((M + 2) * (N + 2), sizeof(real_t));
+    buffers[1] = (real_t*)calloc((M + 2) * (N + 2), sizeof(real_t));
+    buffers[2] = (real_t*)calloc((M + 2) * (N + 2), sizeof(real_t));
+  
     // Allocate 3 buffers to the device
-    cudaErrorCheck(cudaMalloc((void**) &d_prv, size));
-    cudaErrorCheck(cudaMalloc((void**) &d_current, size));
-    cudaErrorCheck(cudaMalloc((void**) &d_nxt, size));
+    cudaMalloc((void**) &d_prv, size);
+    cudaMalloc((void**) &d_current, size);
+    cudaMalloc((void**) &d_nxt, size);
 
     for ( int_t i=0; i<M; i++ )
     {
@@ -294,12 +308,13 @@ void domain_initialize ( void )
             // Calculate delta (radial distance) adjusted for M x N grid
             real_t delta = sqrt ( ((i - M/2.0) * (i - M/2.0)) / (real_t)M +
                                   ((j - N/2.0) * (j - N/2.0)) / (real_t)N );
-            h_U_prv(i,j) = h_U(i,j) = exp ( -4.0*delta*delta );
+            U_prv(i,j) = U(i,j) = exp ( -4.0*delta*delta );
         }
     }
     // Copy initialized onto device
-    cudaErrorCheck(cudaMemcpy(d_prv, h_buffers[0], size, cudaMemcpyHostToDevice));
-    cudaErrorCheck(cudaMemcpy(d_current, h_buffers[0], size, cudaMemcpyHostToDevice));
+    cudaMemcpy(d_prv, buffers[0], size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_current, buffers[1], size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_nxt, buffers[2], size, cudaMemcpyHostToDevice);
 
     // Set the time step for 2D case
     dt = dx*dy / (c * sqrt (dx*dx+dy*dy));
